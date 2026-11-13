@@ -1,0 +1,3 @@
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
+-keep class com.novacam.ai.domain.** { *; }
+-keep class com.novacam.ai.data.** { *; }
