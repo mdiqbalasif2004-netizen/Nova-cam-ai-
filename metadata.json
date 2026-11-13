@@ -1,0 +1,11 @@
+{
+  "name": "NOVA CAM AI",
+  "description": "Professional AI photography, cinematic colour grading, live composition coaching, and Xiaomi 17T camera engineering studio.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
