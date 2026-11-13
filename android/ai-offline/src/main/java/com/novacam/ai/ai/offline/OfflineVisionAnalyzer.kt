@@ -75,5 +75,6 @@ class OfflineVisionAnalyzer(
                 }
             }
             .addOnFailureListener { imageProxy.close() }
+            .addOnCanceledListener { imageProxy.close() }
     }
 }

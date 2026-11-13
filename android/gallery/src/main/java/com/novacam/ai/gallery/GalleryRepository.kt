@@ -43,8 +43,8 @@ class GalleryRepository(private val context: Context) {
                 result += MediaItemEntry(
                     id = id,
                     uri = uri,
-                    displayName = cursor.getString(nameCol),
-                    mimeType = cursor.getString(mimeCol),
+                    displayName = cursor.getString(nameCol) ?: "NOVA_${id}.jpg",
+                    mimeType = cursor.getString(mimeCol) ?: "image/jpeg",
                     dateAddedSec = cursor.getLong(dateCol)
                 )
             }

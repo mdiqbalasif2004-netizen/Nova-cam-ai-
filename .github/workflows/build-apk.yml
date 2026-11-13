@@ -57,13 +57,11 @@ jobs:
           if [ -f "settings.gradle.kts" ] && [ -d "app" ]; then
             echo "dir=." >> "$GITHUB_OUTPUT"
             echo "apk_path=app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_OUTPUT"
-            echo "Detected Android project at repository root (.)"
           elif [ -f "android/settings.gradle.kts" ] && [ -d "android/app" ]; then
             echo "dir=android" >> "$GITHUB_OUTPUT"
             echo "apk_path=android/app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_OUTPUT"
-            echo "Detected Android project inside android/ directory"
           else
-            echo "ERROR: Could not find Android Gradle project (settings.gradle.kts + app/) at repo root or android/."
+            echo "ERROR: Could not locate settings.gradle.kts and app/ at repository root or android/."
             exit 1
           fi
 
@@ -137,7 +135,7 @@ jobs:
           RAW_REPO="${GITHUB_REPOSITORY##*/}"
           SAFE_REPO="$(echo "$RAW_REPO" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//')"
           if [ -z "$SAFE_REPO" ]; then
-            SAFE_REPO="nova-cam-ai"
+            SAFE_REPO="android-app"
           fi
           STAGE_DIR="$(mktemp -d "${RUNNER_TEMP}/release-asset-XXXXXX")"
           ASSET_NAME="${SAFE_REPO}-debug-build-${GITHUB_RUN_NUMBER}.apk"
@@ -216,6 +214,6 @@ jobs:
             {
               echo "### Warning: GitHub Release Publishing Failed"
               echo "- The debug APK build **succeeded** and the GitHub Actions artifact \`app-debug-apk\` remains available for download on this run."
-              echo "- Release publishing failed; check workflow permissions or tag state before retrying."
+              echo "- Release publishing failed; check repository workflow permissions or tag state before retrying."
             } >> "$GITHUB_STEP_SUMMARY"
           fi

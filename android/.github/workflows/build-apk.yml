@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-debug-apk:
     runs-on: ubuntu-latest
@@ -91,11 +95,16 @@ jobs:
             exit 1
           fi
 
+      - name: Run unit tests
+        working-directory: ${{ steps.locate_project.outputs.dir }}
+        run: gradle :ai-core:testDebugUnitTest --stacktrace --no-daemon
+
       - name: Build debug APK
         working-directory: ${{ steps.locate_project.outputs.dir }}
         run: gradle :app:assembleDebug --stacktrace --no-daemon
 
       - name: Verify debug APK
+        id: verify_apk
         working-directory: ${{ steps.locate_project.outputs.dir }}
         run: |
           set -euo pipefail
@@ -119,7 +128,11 @@ jobs:
               exit 1
               ;;
           esac
-          echo "Verified debug APK: $APK_PATH ($(wc -c < "$APK_PATH") bytes)"
+          APK_SHA256="$(sha256sum "$APK_PATH" | awk '{print $1}')"
+          APK_BYTES="$(wc -c < "$APK_PATH")"
+          echo "Verified debug APK: $APK_PATH ($APK_BYTES bytes, SHA-256: $APK_SHA256)"
+          echo "sha256=${APK_SHA256}" >> "$GITHUB_OUTPUT"
+          echo "bytes=${APK_BYTES}" >> "$GITHUB_OUTPUT"
 
       - name: Upload debug APK artifact
         id: upload_artifact
@@ -152,10 +165,10 @@ jobs:
 
       - name: Publish APK to GitHub Releases
         id: publish_release
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           ASSET_PATH: ${{ steps.prepare_asset.outputs.asset_path }}
+          APK_SHA256: ${{ steps.verify_apk.outputs.sha256 }}
         run: |
           set -euo pipefail
           gh --version
@@ -178,6 +191,7 @@ jobs:
             "- Run Number: ${GITHUB_RUN_NUMBER}" \
             "- Run Attempt: ${GITHUB_RUN_ATTEMPT}" \
             "- Source Commit: ${GITHUB_SHA}" \
+            "- SHA-256: \`${APK_SHA256}\`" \
             "- Purpose: Testing build only (not a Play Store production release)" \
             "- Signing: Signed only with a temporary debug keystore")"
           gh release create "$TAG" "$ASSET_PATH" \
@@ -187,11 +201,12 @@ jobs:
             --latest
 
       - name: Report APK download result
-        if: ${{ !cancelled() && steps.upload_artifact.outcome == 'success' }}
+        if: ${{ always() && steps.upload_artifact.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
           OUTCOME: ${{ steps.publish_release.outcome }}
           ASSET_NAME: ${{ steps.prepare_asset.outputs.asset_name }}
+          APK_SHA256: ${{ steps.verify_apk.outputs.sha256 }}
         run: |
           set -euo pipefail
           TAG="debug-apk-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
@@ -208,14 +223,14 @@ jobs:
               echo "- **Release Title:** $TITLE"
               echo "- **Download Page:** $RELEASE_URL"
               echo "- **APK Asset:** \`$ASSET_NAME\` (download directly from the **Assets** section on the Release page)"
+              echo "- **SHA-256:** \`$APK_SHA256\`"
               echo "- **Backup Artifact:** GitHub Actions artifact \`app-debug-apk\` is also available on this workflow run."
             } >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "::warning::GitHub Release publishing failed, but the debug APK build and artifact upload succeeded."
-            echo "Backup Actions artifact available: app-debug-apk"
+            echo "::error::GitHub Release publishing failed. Check Settings > Actions > General > Workflow permissions (Read and write permissions)."
             {
-              echo "### Warning: GitHub Release Publishing Failed"
+              echo "### Error: GitHub Release Publishing Failed"
               echo "- The debug APK build **succeeded** and the GitHub Actions artifact \`app-debug-apk\` remains available for download on this run."
-              echo "- Release publishing failed; check workflow permissions or tag state before retrying."
+              echo "- Enable **Read and write permissions** under **Settings > Actions > General > Workflow permissions** and re-run."
             } >> "$GITHUB_STEP_SUMMARY"
           fi

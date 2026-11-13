@@ -523,7 +523,7 @@ export function SettingsView({
                 Android Studio Kotlin & Jetpack Compose Source Tree
               </h2>
               <p className="text-xs text-zinc-400 mt-0.5">
-                Modular Gradle project targeting Xiaomi 17T (CameraX + Camera2 Interop + Media3 + Room + DataStore + WorkManager). Note: This web sandbox lacks an Android SDK/Gradle binary, so APK compilation must run in Android Studio locally.
+                Modular Gradle project targeting Xiaomi 17T (CameraX + Camera2 Interop + Media3 + Room + DataStore + WorkManager). Note: This web sandbox lacks a JDK/Android SDK binary, so APKs are compiled automatically via GitHub Actions (<code className="font-mono">.github/workflows/build-apk.yml</code>) or locally in Android Studio.
               </p>
             </div>
             <a
