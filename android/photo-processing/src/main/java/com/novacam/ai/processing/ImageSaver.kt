@@ -26,6 +26,15 @@ object ImageSaver {
         return origUri to gradedUri
     }
 
+    fun saveGradedCopy(
+        context: Context,
+        graded: Bitmap,
+        fileName: String,
+        lensSummary: String
+    ): Uri? {
+        return writeJpegToMediaStore(context, graded, fileName, "Pictures/NovaCamAI", lensSummary)
+    }
+
     private fun writeJpegToMediaStore(
         context: Context,
         bitmap: Bitmap,

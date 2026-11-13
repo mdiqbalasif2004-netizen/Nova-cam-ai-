@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Application
 import android.content.ContentValues
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
@@ -12,6 +13,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
@@ -73,9 +75,12 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.novacam.ai.ai.AiSceneOptimizer
+import com.novacam.ai.ai.HardwareMappedParameters
 import com.novacam.ai.ai.offline.OfflineVisionAnalyzer
 import com.novacam.ai.cameracore.HardwareCapabilityManager
 import com.novacam.ai.cinematic.CinematicProfile
+import com.novacam.ai.cinematic.ColorGradingPipeline
+import com.novacam.ai.cinematic.GradeAdjustments
 import com.novacam.ai.composition.CompositionCoachEngine
 import com.novacam.ai.controls.Camera2ControlsBinder
 import com.novacam.ai.controls.ManualCaptureParams
@@ -85,6 +90,7 @@ import com.novacam.ai.domain.SceneCategory
 import com.novacam.ai.domain.ThemeConfig
 import com.novacam.ai.gallery.GalleryRepository
 import com.novacam.ai.gallery.MediaItemEntry
+import com.novacam.ai.processing.ImageSaver
 import com.novacam.ai.settings.SettingsStateHolder
 import com.novacam.ai.theme.NovaTheme
 import com.novacam.ai.theme.ThemeDataStore
@@ -93,7 +99,9 @@ import com.novacam.ai.ui.glass.NovaBottomNavigationBar
 import com.novacam.ai.video.VideoRecorderManager
 import com.novacam.ai.videohdr.HdrProfileDetector
 import com.novacam.ai.xiaomi.Xiaomi17TCameraProfile
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 
 class NovaCamApplication : Application() {
@@ -252,6 +260,7 @@ fun NovaAppRoot(app: NovaCamApplication, themeConfig: ThemeConfig) {
                         selectedProfile = selectedProfile,
                         onSelectProfile = { selectedProfile = it },
                         detectedScene = detectedScene,
+                        mappedParams = mappedSceneParams,
                         mappedParamsSummary = mappedSceneParams?.let {
                             buildString {
                                 append(it.scene.name)
@@ -284,6 +293,7 @@ fun NovaAppRoot(app: NovaCamApplication, themeConfig: ThemeConfig) {
                         selectedProfile = selectedProfile,
                         onSelectProfile = { selectedProfile = it },
                         detectedScene = detectedScene,
+                        mappedParams = mappedSceneParams,
                         mappedParamsSummary = selectedReport?.let {
                             "HDR: ${HdrProfileDetector.availableModes(it).joinToString { m -> m.name }}"
                         } ?: "Probing Video HDR...",
@@ -340,6 +350,7 @@ private fun CameraWorkspaceScreen(
     selectedProfile: CinematicProfile,
     onSelectProfile: (CinematicProfile) -> Unit,
     detectedScene: SceneCategory,
+    mappedParams: HardwareMappedParameters?,
     mappedParamsSummary: String,
     coachInstruction: String?,
     autoOptimize: Boolean,
@@ -347,6 +358,7 @@ private fun CameraWorkspaceScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val scope = rememberCoroutineScope()
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val latestOnFrameAnalyzed by rememberUpdatedState(onFrameAnalyzed)
     val previewView = remember(context) {
@@ -356,6 +368,7 @@ private fun CameraWorkspaceScreen(
     }
     val videoRecorder = remember(context) { VideoRecorderManager(context) }
 
+    var activeCamera by remember { mutableStateOf<Camera?>(null) }
     var activeImageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var activeVideoCapture by remember { mutableStateOf<VideoCapture<Recorder>?>(null) }
     var isRecording by remember { mutableStateOf(false) }
@@ -368,7 +381,9 @@ private fun CameraWorkspaceScreen(
         }
     }
 
-    LaunchedEffect(hasCameraPermission, isVideoMode, selectedLensRole, autoOptimize, activeReport) {
+    val isFront = selectedLensRole == LensRole.FRONT
+
+    LaunchedEffect(hasCameraPermission, isVideoMode, isFront, autoOptimize, activeReport?.cameraId) {
         if (!hasCameraPermission) return@LaunchedEffect
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
@@ -378,14 +393,14 @@ private fun CameraWorkspaceScreen(
                 if (autoOptimize && activeReport != null) {
                     Camera2ControlsBinder.applySupportedParams(
                         builder = previewBuilder,
-                        params = ManualCaptureParams(evSteps = 0),
+                        params = ManualCaptureParams(evSteps = mappedParams?.exposureCompSteps ?: 0),
                         caps = activeReport
                     )
                 }
                 val preview = previewBuilder.build().also {
                     it.surfaceProvider = previewView.surfaceProvider
                 }
-                val selector = if (selectedLensRole == LensRole.FRONT) {
+                val selector = if (isFront) {
                     CameraSelector.DEFAULT_FRONT_CAMERA
                 } else {
                     CameraSelector.DEFAULT_BACK_CAMERA
@@ -398,11 +413,21 @@ private fun CameraWorkspaceScreen(
                     )
                     activeImageCapture = null
                     activeVideoCapture = vc
-                    provider.bindToLifecycle(lifecycleOwner, selector, preview, vc)
+                    activeCamera = provider.bindToLifecycle(lifecycleOwner, selector, preview, vc)
                 } else {
-                    val ic = ImageCapture.Builder()
+                    val icBuilder = ImageCapture.Builder()
                         .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                        .build()
+                    if (autoOptimize && activeReport != null) {
+                        Camera2ControlsBinder.applySupportedParams(
+                            builder = icBuilder,
+                            params = ManualCaptureParams(
+                                evSteps = mappedParams?.exposureCompSteps,
+                                whiteBalanceKelvin = mappedParams?.whiteBalanceKelvin
+                            ),
+                            caps = activeReport
+                        )
+                    }
+                    val ic = icBuilder.build()
                     val analysis = ImageAnalysis.Builder()
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build()
@@ -416,12 +441,36 @@ private fun CameraWorkspaceScreen(
                         }
                     activeVideoCapture = null
                     activeImageCapture = ic
-                    provider.bindToLifecycle(lifecycleOwner, selector, preview, ic, analysis)
+                    activeCamera = provider.bindToLifecycle(lifecycleOwner, selector, preview, ic, analysis)
                 }
             }.onFailure { err ->
                 captureStatus = "Camera bind note: ${err.localizedMessage ?: "Unsupported combination"}"
             }
         }, ContextCompat.getMainExecutor(context))
+    }
+
+    LaunchedEffect(activeCamera, selectedLensRole) {
+        val cam = activeCamera ?: return@LaunchedEffect
+        val zoomRange = cam.cameraInfo.zoomState.value ?: return@LaunchedEffect
+        val desiredZoom = when (selectedLensRole) {
+            LensRole.ULTRA_WIDE -> 0.6f
+            LensRole.MAIN, LensRole.FRONT -> 1.0f
+            LensRole.TELEPHOTO -> 5.0f
+        }.coerceIn(zoomRange.minZoomRatio, zoomRange.maxZoomRatio)
+        cam.cameraControl.setZoomRatio(desiredZoom)
+    }
+
+    LaunchedEffect(activeCamera, autoOptimize, mappedParams?.exposureCompSteps) {
+        val cam = activeCamera ?: return@LaunchedEffect
+        val expState = cam.cameraInfo.exposureState
+        if (autoOptimize && expState.isExposureCompensationSupported) {
+            val steps = mappedParams?.exposureCompSteps ?: 0
+            val clamped = steps.coerceIn(
+                expState.exposureCompensationRange.lower,
+                expState.exposureCompensationRange.upper
+            )
+            cam.cameraControl.setExposureCompensationIndex(clamped)
+        }
     }
 
     Box(
@@ -581,23 +630,66 @@ private fun CameraWorkspaceScreen(
                                 Button(
                                     onClick = {
                                         val ic = activeImageCapture ?: return@Button
+                                        val baseName = "NOVA_${System.currentTimeMillis()}"
                                         val values = ContentValues().apply {
-                                            put(MediaStore.Images.Media.DISPLAY_NAME, "NOVA_${System.currentTimeMillis()}.jpg")
+                                            put(MediaStore.Images.Media.DISPLAY_NAME, "${baseName}_original.jpg")
                                             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                                            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/NovaCamAI")
+                                            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/NovaCamAI/Originals")
                                         }
                                         val outputOptions = ImageCapture.OutputFileOptions.Builder(
                                             context.contentResolver,
                                             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                                             values
                                         ).build()
+                                        val chosenProfile = selectedProfile
+                                        val lensDesc = "${selectedLensRole.name} ${activeReport?.focalLengthMm ?: 23f}mm"
                                         captureStatus = "Capturing..."
                                         ic.takePicture(
                                             outputOptions,
                                             ContextCompat.getMainExecutor(context),
                                             object : ImageCapture.OnImageSavedCallback {
                                                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                                                    captureStatus = "Saved JPEG (${selectedProfile.displayName}) to Pictures/NovaCamAI"
+                                                    val savedUri = output.savedUri
+                                                    if (chosenProfile == CinematicProfile.NEUTRAL || savedUri == null) {
+                                                        captureStatus = "Saved untouched original to Pictures/NovaCamAI/Originals"
+                                                        return
+                                                    }
+                                                    captureStatus = "Saved original · grading ${chosenProfile.displayName}..."
+                                                    scope.launch {
+                                                        val gradedOk = withContext(Dispatchers.IO) {
+                                                            runCatching {
+                                                                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                                                                context.contentResolver.openInputStream(savedUri)?.use {
+                                                                    BitmapFactory.decodeStream(it, null, bounds)
+                                                                }
+                                                                val maxDim = maxOf(bounds.outWidth, bounds.outHeight)
+                                                                val sample = if (maxDim > 4096) 2 else 1
+                                                                val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
+                                                                val bmp = context.contentResolver.openInputStream(savedUri)?.use {
+                                                                    BitmapFactory.decodeStream(it, null, decodeOpts)
+                                                                } ?: return@runCatching false
+                                                                val graded = ColorGradingPipeline.renderNonDestructive(
+                                                                    bmp,
+                                                                    chosenProfile,
+                                                                    GradeAdjustments()
+                                                                )
+                                                                bmp.recycle()
+                                                                ImageSaver.saveGradedCopy(
+                                                                    context = context,
+                                                                    graded = graded,
+                                                                    fileName = "${baseName}_${chosenProfile.name.lowercase()}.jpg",
+                                                                    lensSummary = lensDesc
+                                                                )
+                                                                graded.recycle()
+                                                                true
+                                                            }.getOrDefault(false)
+                                                        }
+                                                        captureStatus = if (gradedOk) {
+                                                            "Saved Original + ${chosenProfile.displayName} copy"
+                                                        } else {
+                                                            "Saved original to Pictures/NovaCamAI/Originals"
+                                                        }
+                                                    }
                                                 }
 
                                                 override fun onError(exception: ImageCaptureException) {

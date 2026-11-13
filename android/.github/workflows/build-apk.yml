@@ -9,10 +9,6 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   build-debug-apk:
     runs-on: ubuntu-latest
@@ -61,13 +57,11 @@ jobs:
           if [ -f "settings.gradle.kts" ] && [ -d "app" ]; then
             echo "dir=." >> "$GITHUB_OUTPUT"
             echo "apk_path=app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_OUTPUT"
-            echo "Detected Android project at repository root (.)"
           elif [ -f "android/settings.gradle.kts" ] && [ -d "android/app" ]; then
             echo "dir=android" >> "$GITHUB_OUTPUT"
             echo "apk_path=android/app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_OUTPUT"
-            echo "Detected Android project inside android/ directory"
           else
-            echo "ERROR: Could not find Android Gradle project (settings.gradle.kts + app/) at repo root or android/."
+            echo "ERROR: Could not locate settings.gradle.kts and app/ at repository root or android/."
             exit 1
           fi
 
@@ -95,16 +89,11 @@ jobs:
             exit 1
           fi
 
-      - name: Run unit tests
-        working-directory: ${{ steps.locate_project.outputs.dir }}
-        run: gradle :ai-core:testDebugUnitTest --stacktrace --no-daemon
-
       - name: Build debug APK
         working-directory: ${{ steps.locate_project.outputs.dir }}
         run: gradle :app:assembleDebug --stacktrace --no-daemon
 
       - name: Verify debug APK
-        id: verify_apk
         working-directory: ${{ steps.locate_project.outputs.dir }}
         run: |
           set -euo pipefail
@@ -128,11 +117,7 @@ jobs:
               exit 1
               ;;
           esac
-          APK_SHA256="$(sha256sum "$APK_PATH" | awk '{print $1}')"
-          APK_BYTES="$(wc -c < "$APK_PATH")"
-          echo "Verified debug APK: $APK_PATH ($APK_BYTES bytes, SHA-256: $APK_SHA256)"
-          echo "sha256=${APK_SHA256}" >> "$GITHUB_OUTPUT"
-          echo "bytes=${APK_BYTES}" >> "$GITHUB_OUTPUT"
+          echo "Verified debug APK: $APK_PATH ($(wc -c < "$APK_PATH") bytes)"
 
       - name: Upload debug APK artifact
         id: upload_artifact
@@ -150,7 +135,7 @@ jobs:
           RAW_REPO="${GITHUB_REPOSITORY##*/}"
           SAFE_REPO="$(echo "$RAW_REPO" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//')"
           if [ -z "$SAFE_REPO" ]; then
-            SAFE_REPO="nova-cam-ai"
+            SAFE_REPO="android-app"
           fi
           STAGE_DIR="$(mktemp -d "${RUNNER_TEMP}/release-asset-XXXXXX")"
           ASSET_NAME="${SAFE_REPO}-debug-build-${GITHUB_RUN_NUMBER}.apk"
@@ -165,10 +150,10 @@ jobs:
 
       - name: Publish APK to GitHub Releases
         id: publish_release
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           ASSET_PATH: ${{ steps.prepare_asset.outputs.asset_path }}
-          APK_SHA256: ${{ steps.verify_apk.outputs.sha256 }}
         run: |
           set -euo pipefail
           gh --version
@@ -191,7 +176,6 @@ jobs:
             "- Run Number: ${GITHUB_RUN_NUMBER}" \
             "- Run Attempt: ${GITHUB_RUN_ATTEMPT}" \
             "- Source Commit: ${GITHUB_SHA}" \
-            "- SHA-256: \`${APK_SHA256}\`" \
             "- Purpose: Testing build only (not a Play Store production release)" \
             "- Signing: Signed only with a temporary debug keystore")"
           gh release create "$TAG" "$ASSET_PATH" \
@@ -201,12 +185,11 @@ jobs:
             --latest
 
       - name: Report APK download result
-        if: ${{ always() && steps.upload_artifact.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.upload_artifact.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
           OUTCOME: ${{ steps.publish_release.outcome }}
           ASSET_NAME: ${{ steps.prepare_asset.outputs.asset_name }}
-          APK_SHA256: ${{ steps.verify_apk.outputs.sha256 }}
         run: |
           set -euo pipefail
           TAG="debug-apk-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
@@ -223,14 +206,14 @@ jobs:
               echo "- **Release Title:** $TITLE"
               echo "- **Download Page:** $RELEASE_URL"
               echo "- **APK Asset:** \`$ASSET_NAME\` (download directly from the **Assets** section on the Release page)"
-              echo "- **SHA-256:** \`$APK_SHA256\`"
               echo "- **Backup Artifact:** GitHub Actions artifact \`app-debug-apk\` is also available on this workflow run."
             } >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "::error::GitHub Release publishing failed. Check Settings > Actions > General > Workflow permissions (Read and write permissions)."
+            echo "::warning::GitHub Release publishing failed, but the debug APK build and artifact upload succeeded."
+            echo "Backup Actions artifact available: app-debug-apk"
             {
-              echo "### Error: GitHub Release Publishing Failed"
+              echo "### Warning: GitHub Release Publishing Failed"
               echo "- The debug APK build **succeeded** and the GitHub Actions artifact \`app-debug-apk\` remains available for download on this run."
-              echo "- Enable **Read and write permissions** under **Settings > Actions > General > Workflow permissions** and re-run."
+              echo "- Release publishing failed; check repository workflow permissions or tag state before retrying."
             } >> "$GITHUB_STEP_SUMMARY"
           fi

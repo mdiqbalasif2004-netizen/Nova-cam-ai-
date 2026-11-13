@@ -36,14 +36,13 @@ object Camera2ControlsBinder {
             ext.setCaptureRequestOption(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, clamped)
         }
 
-        if (params.iso != null && caps.isoRange != null) {
+        if (params.iso != null && caps.isoRange != null && caps.exposureNsRange != null) {
             val clampedIso = params.iso.coerceIn(caps.isoRange.first, caps.isoRange.last)
+            val targetExp = params.exposureTimeNs ?: 10_000_000L
+            val clampedExp = targetExp.coerceIn(caps.exposureNsRange.first, caps.exposureNsRange.last)
             ext.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
             ext.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, clampedIso)
-            if (params.exposureTimeNs != null && caps.exposureNsRange != null) {
-                val clampedExp = params.exposureTimeNs.coerceIn(caps.exposureNsRange.first, caps.exposureNsRange.last)
-                ext.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, clampedExp)
-            }
+            ext.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, clampedExp)
         }
 
         if (params.focusDistanceDiopters != null && caps.supportsManualFocus) {

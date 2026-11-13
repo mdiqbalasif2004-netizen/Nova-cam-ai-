@@ -19,8 +19,9 @@ class HardwareCapabilityManager(context: Context) {
 
     fun probeAllCameras(): List<CameraCapabilityReport> {
         val reports = mutableListOf<CameraCapabilityReport>()
-        for (id in cameraManager.cameraIdList) {
-            val chars = cameraManager.getCameraCharacteristics(id)
+        val ids = runCatching { cameraManager.cameraIdList }.getOrDefault(emptyArray())
+        for (id in ids) {
+            val chars = runCatching { cameraManager.getCameraCharacteristics(id) }.getOrNull() ?: continue
             val facing = chars.get(CameraCharacteristics.LENS_FACING)
             val physicalIds = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 chars.physicalCameraIds
@@ -29,9 +30,16 @@ class HardwareCapabilityManager(context: Context) {
             }
 
             if (physicalIds.isNotEmpty() && facing == CameraCharacteristics.LENS_FACING_BACK) {
+                var addedPhysical = false
                 for (physId in physicalIds) {
-                    val physChars = cameraManager.getCameraCharacteristics(physId)
-                    reports += buildReport(id, physId, physChars, isFront = false)
+                    val physChars = runCatching { cameraManager.getCameraCharacteristics(physId) }.getOrNull()
+                    if (physChars != null) {
+                        reports += buildReport(id, physId, physChars, isFront = false)
+                        addedPhysical = true
+                    }
+                }
+                if (!addedPhysical) {
+                    reports += buildReport(id, null, chars, isFront = false)
                 }
             } else {
                 reports += buildReport(id, null, chars, isFront = facing == CameraCharacteristics.LENS_FACING_FRONT)
