@@ -40,12 +40,35 @@ jobs:
             exit 1
           fi
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
+
       - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.3.1"
 
+      - name: Locate Android project directory
+        id: locate_project
+        run: |
+          set -euo pipefail
+          if [ -f "settings.gradle.kts" ] && [ -d "app" ]; then
+            echo "dir=." >> "$GITHUB_OUTPUT"
+            echo "apk_path=app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_OUTPUT"
+            echo "Detected Android project at repository root (.)"
+          elif [ -f "android/settings.gradle.kts" ] && [ -d "android/app" ]; then
+            echo "dir=android" >> "$GITHUB_OUTPUT"
+            echo "apk_path=android/app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_OUTPUT"
+            echo "Detected Android project inside android/ directory"
+          else
+            echo "ERROR: Could not find Android Gradle project (settings.gradle.kts + app/) at repo root or android/."
+            exit 1
+          fi
+
       - name: Create temporary debug keystore
+        working-directory: ${{ steps.locate_project.outputs.dir }}
         run: |
           set -euo pipefail
           if [ ! -f ./debug.keystore ]; then
@@ -69,16 +92,18 @@ jobs:
           fi
 
       - name: Build debug APK
+        working-directory: ${{ steps.locate_project.outputs.dir }}
         run: gradle :app:assembleDebug --stacktrace --no-daemon
 
       - name: Verify debug APK
+        working-directory: ${{ steps.locate_project.outputs.dir }}
         run: |
           set -euo pipefail
           APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
           if [ ! -f "$APK_PATH" ]; then
             echo "ERROR: Expected debug APK not found at $APK_PATH"
             if [ -d "app/build/outputs/apk" ]; then
-              echo "Discovered files inside app/build/outputs/apk:"
+              echo "Discovered APK paths inside app/build/outputs/apk:"
               find app/build/outputs/apk -type f -name "*.apk" -print
             fi
             exit 1
@@ -101,18 +126,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.locate_project.outputs.apk_path }}
           if-no-files-found: error
 
       - name: Prepare APK release asset
         id: prepare_asset
         run: |
           set -euo pipefail
-          APK_SRC="app/build/outputs/apk/debug/app-debug.apk"
+          APK_SRC="${{ steps.locate_project.outputs.apk_path }}"
           RAW_REPO="${GITHUB_REPOSITORY##*/}"
           SAFE_REPO="$(echo "$RAW_REPO" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//')"
           if [ -z "$SAFE_REPO" ]; then
-            SAFE_REPO="android-app"
+            SAFE_REPO="nova-cam-ai"
           fi
           STAGE_DIR="$(mktemp -d "${RUNNER_TEMP}/release-asset-XXXXXX")"
           ASSET_NAME="${SAFE_REPO}-debug-build-${GITHUB_RUN_NUMBER}.apk"

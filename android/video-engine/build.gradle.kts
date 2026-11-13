@@ -14,6 +14,7 @@ android {
 
 dependencies {
     implementation(project(":domain"))
+    implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.camera.core)
     implementation(libs.androidx.camera.video)
     implementation(libs.androidx.media3.exoplayer)

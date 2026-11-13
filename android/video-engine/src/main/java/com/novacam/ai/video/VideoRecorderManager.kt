@@ -1,5 +1,6 @@
 package com.novacam.ai.video
 
+import android.annotation.SuppressLint
 import android.content.ContentValues
 import android.content.Context
 import android.provider.MediaStore
@@ -31,6 +32,7 @@ class VideoRecorderManager(private val context: Context) {
         return VideoCapture.withOutput(recorder)
     }
 
+    @SuppressLint("MissingPermission")
     fun startRecording(
         videoCapture: VideoCapture<Recorder>,
         enableAudio: Boolean,

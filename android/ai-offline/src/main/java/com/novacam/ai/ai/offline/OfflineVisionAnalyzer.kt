@@ -1,5 +1,7 @@
 package com.novacam.ai.ai.offline
 
+import androidx.annotation.OptIn
+import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import com.google.mlkit.vision.common.InputImage
@@ -22,6 +24,7 @@ class OfflineVisionAnalyzer(
     private val labeler = ImageLabeling.getClient(ImageLabelerOptions.DEFAULT_OPTIONS)
     private val faceDetector = FaceDetection.getClient()
 
+    @OptIn(ExperimentalGetImage::class)
     override fun analyze(imageProxy: ImageProxy) {
         val now = System.currentTimeMillis()
         if (now - lastAnalyzedMs.get() < 750L) {
