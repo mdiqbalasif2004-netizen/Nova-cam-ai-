@@ -97,6 +97,7 @@ jobs:
           echo "Verified debug APK: $APK_PATH ($(wc -c < "$APK_PATH") bytes)"
 
       - name: Upload debug APK artifact
+        id: upload_artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
@@ -146,16 +147,14 @@ jobs:
           esac
           TAG="debug-apk-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
           TITLE="Debug APK Build #${GITHUB_RUN_NUMBER}"
-          NOTES=$(cat <<EOF
-          Automatically generated debug APK built by GitHub Actions.
-
-          - Run Number: ${GITHUB_RUN_NUMBER}
-          - Run Attempt: ${GITHUB_RUN_ATTEMPT}
-          - Source Commit: ${GITHUB_SHA}
-          - Build Type: Debug testing build (not a Play Store production release)
-          - Signing: Signed only with a temporary debug keystore
-          EOF
-          )
+          NOTES="$(printf '%s\n' \
+            "Automatically generated debug APK built by GitHub Actions." \
+            "" \
+            "- Run Number: ${GITHUB_RUN_NUMBER}" \
+            "- Run Attempt: ${GITHUB_RUN_ATTEMPT}" \
+            "- Source Commit: ${GITHUB_SHA}" \
+            "- Purpose: Testing build only (not a Play Store production release)" \
+            "- Signing: Signed only with a temporary debug keystore")"
           gh release create "$TAG" "$ASSET_PATH" \
             --target "$GITHUB_SHA" \
             --title "$TITLE" \
@@ -163,7 +162,7 @@ jobs:
             --latest
 
       - name: Report APK download result
-        if: always()
+        if: ${{ !cancelled() && steps.upload_artifact.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
           OUTCOME: ${{ steps.publish_release.outcome }}
